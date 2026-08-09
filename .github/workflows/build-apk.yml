@@ -1,80 +1,142 @@
 name: Build SZXVPN APK
 
 on:
-  workflow_dispatch:
-  push:
-    branches: ["main"]
+workflow_dispatch:
+push:
+branches: ["main"]
 
 permissions:
-  contents: read
+contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-24.04
-    env:
-      SING_BOX_VERSION: "1.14.0"
-      ANDROID_NDK_VERSION: "27.2.12479018"
+build:
+runs-on: ubuntu-24.04
 
-    steps:
-      - name: Checkout app
-        uses: actions/checkout@v4
+env:
+  SING_BOX_VERSION: "1.13.12"
+  ANDROID_NDK_VERSION: "27.2.12479018"
 
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
+steps:
+  - name: Checkout app
+    uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24.x"
+  - name: Setup Java 17
+    uses: actions/setup-java@v4
+    with:
+      distribution: temurin
+      java-version: "17"
 
-      - name: Setup Android SDK/NDK
-        uses: android-actions/setup-android@v3
+  - name: Setup Go
+    uses: actions/setup-go@v5
+    with:
+      go-version: "1.24.x"
 
-      - name: Install NDK
-        run: yes | sdkmanager --licenses >/dev/null 2>&1 || true
-             && sdkmanager "ndk;${ANDROID_NDK_VERSION}"
+  - name: Setup Android SDK
+    uses: android-actions/setup-android@v3
 
-      - name: Checkout pinned sing-box
-        run: |
-          git clone --depth 1 --branch "v${SING_BOX_VERSION}"             https://github.com/SagerNet/sing-box.git sing-box
+  - name: Install Android NDK
+    shell: bash
+    run: |
+      yes | sdkmanager --licenses >/dev/null 2>&1 || true
+      sdkmanager "ndk;${ANDROID_NDK_VERSION}"
 
-      - name: Build libbox.aar
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cd sing-box
-          export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
-          export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
-          export CGO_ENABLED=1
-          export ANDROID_NDK="$ANDROID_NDK_HOME"
+  - name: Checkout sing-box
+    shell: bash
+    run: |
+      set -euxo pipefail
 
-          # Keep this build step isolated. If upstream changes its Android
-          # packaging command, Actions fails here instead of producing a fake APK.
-          if make libbox-android; then
-            :
-          elif make libbox.aar; then
-            :
-          else
-            echo "Unable to find the libbox Android build target in this pinned release."
-            echo "Available targets:"
-            make -n 2>/dev/null | head -100 || true
-            exit 1
-          fi
+      git clone \
+        --depth 1 \
+        --branch "v${SING_BOX_VERSION}" \
+        https://github.com/SagerNet/sing-box.git \
+        sing-box
 
-          find . -name "libbox.aar" -print -exec cp {} ../app/libs/libbox.aar \;
-          test -s ../app/libs/libbox.aar
+      cd sing-box
+      git describe --tags --always
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+  - name: Build libbox.aar
+    shell: bash
+    run: |
+      set -euxo pipefail
 
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace
+      cd sing-box
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: szxvpn-debug
-          path: app/build/outputs/apk/debug/*.apk
+      export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+      export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
+      export ANDROID_NDK="${ANDROID_NDK_HOME}"
+      export CGO_ENABLED=1
+
+      echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME}"
+      test -d "${ANDROID_NDK_HOME}"
+
+      echo "Checking Android build targets..."
+
+      if make libbox-android; then
+        echo "libbox-android target completed"
+      elif make libbox.aar; then
+        echo "libbox.aar target completed"
+      else
+        echo "ERROR: Android libbox build target was not found."
+        echo "Available Make targets:"
+        grep -E '^[a-zA-Z0-9_.-]+:' Makefile | head -100 || true
+        exit 1
+      fi
+
+      echo "Searching for libbox.aar..."
+
+      find . -type f -name "libbox.aar" -print
+
+      AAR="$(find . -type f -name "libbox.aar" | head -n 1)"
+
+      if [ -z "${AAR}" ]; then
+        echo "ERROR: libbox.aar was not produced."
+        exit 1
+      fi
+
+      mkdir -p ../app/libs
+      cp "${AAR}" ../app/libs/libbox.aar
+
+      test -s ../app/libs/libbox.aar
+
+      echo "libbox.aar successfully copied:"
+      ls -lh ../app/libs/libbox.aar
+
+  - name: Verify Android project
+    shell: bash
+    run: |
+      set -euxo pipefail
+
+      test -f settings.gradle.kts
+      test -f app/build.gradle.kts
+      test -f app/libs/libbox.aar
+
+      echo "Project files:"
+      find app -maxdepth 4 -type f | sort
+
+  - name: Setup Gradle
+    uses: gradle/actions/setup-gradle@v4
+
+  - name: Build debug APK
+    shell: bash
+    run: |
+      set -euxo pipefail
+      gradle :app:assembleDebug --stacktrace
+
+  - name: Verify APK
+    shell: bash
+    run: |
+      set -euxo pipefail
+
+      find app/build/outputs/apk/debug \
+        -type f \
+        -name "*.apk" \
+        -print
+
+      test -n "$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -n 1)"
+
+  - name: Upload APK
+    uses: actions/upload-artifact@v4
+    with:
+      name: szxvpn-debug
+      path: app/build/outputs/apk/debug/*.apk
+      if-no-files-found: error
