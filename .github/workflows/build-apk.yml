@@ -1,59 +1,177 @@
-name: Android Build
+name: Android Debug Build
 
 on:
   workflow_dispatch:
   push:
+    branches:
+      - "**"
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     env:
-      SING_BOX_VERSION: "1.13.12"
+      SING_BOX_VERSION: "v1.13.12"
       ANDROID_NDK_VERSION: "27.2.12479018"
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
 
-      - name: Setup Java
+      # ============================================================
+      # 1. Checkout Android project
+      # ============================================================
+      - name: Checkout Android project
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ============================================================
+      # 2. Java
+      # ============================================================
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
+      # ============================================================
+      # 3. Go
+      # ============================================================
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: "1.24.13"
 
+      # ============================================================
+      # 4. Android SDK
+      # ============================================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      # ============================================================
+      # 5. Install Android NDK
+      # ============================================================
       - name: Install Android NDK
+        shell: bash
         run: |
           set -euxo pipefail
 
           sdkmanager --install "ndk;${ANDROID_NDK_VERSION}"
 
-      - name: Check Android environment
+          test -d "${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+
+          echo "NDK installed:"
+          ls -la "${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+
+      # ============================================================
+      # 6. Check project structure
+      # ============================================================
+      - name: Check project structure
+        shell: bash
         run: |
           set -euxo pipefail
 
-          echo "ANDROID_HOME=${ANDROID_HOME}"
-          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}"
+          echo "Current directory:"
+          pwd
+
+          echo "Root files:"
+          ls -la
+
+          echo "Checking Gradle:"
+          test -f ./gradlew
+
+          echo "Checking app:"
+          test -d ./app
+
+          chmod +x ./gradlew
+
+      # ============================================================
+      # 7. Download sing-box source
+      # ============================================================
+      - name: Download sing-box
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          rm -rf sing-box
+
+          git clone \
+            --depth 1 \
+            --branch "${SING_BOX_VERSION}" \
+            https://github.com/SagerNet/sing-box.git \
+            sing-box
+
+          echo "sing-box downloaded:"
+          ls -la sing-box
+
+          test -d sing-box
+
+          test -f sing-box/go.mod
+
+          test -f sing-box/cmd/internal/build_libbox/main.go
+
+      # ============================================================
+      # 8. Configure Android NDK
+      # ============================================================
+      - name: Configure Android NDK
+        shell: bash
+        run: |
+          set -euxo pipefail
 
           export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
           export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
 
+          echo "ANDROID_HOME=${ANDROID_HOME}"
+          echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME}"
+          echo "ANDROID_NDK_ROOT=${ANDROID_NDK_ROOT}"
+
           test -d "${ANDROID_NDK_HOME}"
 
-          echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME}"
+      # ============================================================
+      # 9. Install gomobile
+      # ============================================================
+      - name: Install gomobile
+        shell: bash
+        run: |
+          set -euxo pipefail
 
+          echo "Go:"
           go version
-          java -version
-          "${ANDROID_NDK_HOME}/ndk-build" --version || true
 
+          echo "GOPATH:"
+          go env GOPATH
+
+          echo "Removing old gomobile:"
+          rm -f "$(go env GOPATH)/bin/gomobile"
+          rm -f "$(go env GOPATH)/bin/gobind"
+
+          echo "Installing sagernet gomobile:"
+          go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.12
+
+          echo "Installing sagernet gobind:"
+          go install github.com/sagernet/gomobile/cmd/gobind@v0.1.12
+
+          export PATH="$(go env GOPATH)/bin:${PATH}"
+
+          echo "PATH=${PATH}"
+
+          echo "gomobile location:"
+          command -v gomobile
+
+          echo "gobind location:"
+          command -v gobind
+
+          test -x "$(go env GOPATH)/bin/gomobile"
+          test -x "$(go env GOPATH)/bin/gobind"
+
+          echo "gomobile version:"
+          gomobile version || true
+
+      # ============================================================
+      # 10. Build libbox.aar
+      # ============================================================
       - name: Build libbox.aar
         shell: bash
         run: |
@@ -64,49 +182,76 @@ jobs:
           export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
           export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
 
-          mkdir -p ../app/libs
-
-          echo "======================================"
-          echo "Install gomobile"
-          echo "======================================"
-
-          rm -f "$(go env GOPATH)/bin/gomobile"
-          rm -f "$(go env GOPATH)/bin/gobind"
-
-          go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.12
-          go install github.com/sagernet/gomobile/cmd/gobind@v0.1.12
-
           export PATH="$(go env GOPATH)/bin:${PATH}"
 
-          echo "PATH=${PATH}"
+          echo "======================================"
+          echo "Build environment"
+          echo "======================================"
+
+          echo "PWD=$(pwd)"
+          echo "ANDROID_HOME=${ANDROID_HOME}"
+          echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME}"
+          echo "ANDROID_NDK_ROOT=${ANDROID_NDK_ROOT}"
+
+          go version
 
           echo "gomobile:"
           command -v gomobile
           gomobile version || true
 
-          echo "gobind:"
-          command -v gobind
-          gobind -h >/dev/null
+          echo "======================================"
+          echo "Prepare Android output"
+          echo "======================================"
 
-          echo "======================================"
-          echo "Build libbox.aar"
-          echo "======================================"
+          mkdir -p ../app/libs
 
           rm -f ./libbox.aar
+          rm -f ./libbox-legacy.aar
           rm -f ../app/libs/libbox.aar
+          rm -f ../app/libs/libbox-legacy.aar
+
+          echo "======================================"
+          echo "Build libbox"
+          echo "======================================"
 
           go run ./cmd/internal/build_libbox -target android
 
           echo "======================================"
-          echo "Generated files"
+          echo "Search generated AAR"
           echo "======================================"
 
-          find . -type f \
-            \( -name "libbox.aar" -o -name "libbox-legacy.aar" \) \
+          find . \
+            -type f \
+            \( \
+              -name "libbox.aar" \
+              -o \
+              -name "libbox-legacy.aar" \
+            \) \
             -print
 
-          test -f ./libbox.aar
+          echo "======================================"
+          echo "Verify libbox.aar"
+          echo "======================================"
+
+          if [ -f "./libbox.aar" ]; then
+            echo "Found ./libbox.aar"
+          elif [ -f "./libbox-legacy.aar" ]; then
+            echo "Found ./libbox-legacy.aar"
+            cp ./libbox-legacy.aar ./libbox.aar
+          else
+            echo "ERROR: libbox AAR was not generated."
+
+            echo "All AAR files:"
+            find . -type f -name "*.aar" -print || true
+
+            exit 1
+          fi
+
           test -s ./libbox.aar
+
+          echo "======================================"
+          echo "Copy libbox.aar"
+          echo "======================================"
 
           cp ./libbox.aar ../app/libs/libbox.aar
 
@@ -114,23 +259,70 @@ jobs:
           test -s ../app/libs/libbox.aar
 
           echo "======================================"
-          echo "SUCCESS"
+          echo "libbox.aar successfully installed"
           echo "======================================"
 
           ls -lh ../app/libs/libbox.aar
 
-      - name: Build APK
+      # ============================================================
+      # 11. Verify Gradle project
+      # ============================================================
+      - name: Verify Gradle project
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          chmod +x ./gradlew
+
+          echo "Gradle:"
+          ./gradlew --version
+
+          echo "libbox:"
+          ls -lh app/libs/libbox.aar
+
+          test -s app/libs/libbox.aar
+
+      # ============================================================
+      # 12. Build APK
+      # ============================================================
+      - name: Build Debug APK
         shell: bash
         run: |
           set -euxo pipefail
 
           test -s app/libs/libbox.aar
 
-          ./gradlew :app:assembleDebug --stacktrace
+          ./gradlew \
+            :app:assembleDebug \
+            --stacktrace \
+            --warning-mode all
 
-      - name: Upload APK
+      # ============================================================
+      # 13. Show APK
+      # ============================================================
+      - name: Find APK
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "Generated APK files:"
+
+          find app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            -print
+
+          test -n "$(find app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            -print -quit)"
+
+      # ============================================================
+      # 14. Upload APK
+      # ============================================================
+      - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
+          name: android-debug-apk
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
