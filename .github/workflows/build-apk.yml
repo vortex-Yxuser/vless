@@ -1,17 +1,16 @@
 name: Build SZXVPN APK
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build Android APK
     runs-on: ubuntu-24.04
 
     env:
@@ -19,7 +18,7 @@ jobs:
       ANDROID_NDK_VERSION: "27.2.12479018"
 
     steps:
-      - name: Checkout
+      - name: Checkout app
         uses: actions/checkout@v4
 
       - name: Setup Java 17
@@ -39,10 +38,17 @@ jobs:
       - name: Install Android NDK
         shell: bash
         run: |
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "ndk;${ANDROID_NDK_VERSION}"
+          set -euxo pipefail
 
-      - name: Download sing-box
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;${ANDROID_NDK_VERSION}"
+
+      - name: Clone sing-box
         shell: bash
         run: |
           set -euxo pipefail
@@ -54,25 +60,56 @@ jobs:
             sing-box
 
           cd sing-box
+
           git describe --tags --always
 
-      - name: Prepare app libs
-        shell: bash
-        run: |
-          mkdir -p app/libs
-          ls -la app
-
-      - name: Build Android project
+      - name: Build libbox.aar
         shell: bash
         run: |
           set -euxo pipefail
 
-          if [ ! -f "app/build.gradle.kts" ]; then
-            echo "app/build.gradle.kts not found"
-            exit 1
-          fi
+          cd sing-box
 
-          echo "Android project found."
+          export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+          export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
+
+          mkdir -p ../app/libs
+
+          echo "ANDROID_HOME=${ANDROID_HOME}"
+          echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME}"
+
+          go version
+
+          # Install the gomobile tools required by sing-box.
+          go run ./cmd/internal/build_libbox -target android
+
+          echo "Searching for generated AAR..."
+
+          find . -type f \
+            \( -name "libbox.aar" -o -name "libbox-legacy.aar" \) \
+            -print
+
+          test -f libbox.aar
+
+          cp libbox.aar ../app/libs/libbox.aar
+
+          test -s ../app/libs/libbox.aar
+
+          echo "libbox.aar successfully installed:"
+          ls -lh ../app/libs/libbox.aar
+
+      - name: Verify project
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          test -f app/libs/libbox.aar
+
+          ls -lh app/libs/libbox.aar
+
+          unzip -t app/libs/libbox.aar >/dev/null
+
+          echo "AAR verification OK"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -81,30 +118,20 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          gradle :app:assembleDebug --stacktrace
+
+          gradle \
+            :app:assembleDebug \
+            --stacktrace \
+            --no-daemon
 
       - name: Verify APK
         shell: bash
         run: |
           set -euxo pipefail
 
-          find app/build/outputs/apk/debug \
-            -type f \
-            -name "*.apk" \
-            -print
+          find app/build/outputs/apk -type f -name "*.apk" -print
 
-          APK="$(find app/build/outputs/apk/debug \
-            -type f \
-            -name "*.apk" \
-            | head -n 1)"
-
-          if [ -z "$APK" ]; then
-            echo "APK was not generated."
-            exit 1
-          fi
-
-          echo "APK generated successfully:"
-          ls -lh "$APK"
+          test -n "$(find app/build/outputs/apk -type f -name "*.apk" -print -quit)"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
