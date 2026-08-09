@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent">
+    <LinearLayout android:orientation="vertical" android:padding="16dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content">
+        <TextView android:text="SZXVPN" android:textSize="26sp" android:textStyle="bold"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <EditText android:id="@+id/config" android:hint="VLESS / VMess link"
+            android:inputType="textUri" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <EditText android:id="@+id/proxy" android:hint="HTTP proxy host:port (optional)"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <EditText android:id="@+id/payload" android:hint="HTTP CONNECT payload (optional)"
+            android:gravity="top" android:inputType="textMultiLine"
+            android:layout_width="match_parent" android:layout_height="110dp"/>
+        <Button android:id="@+id/connect" android:text="CONNECT"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <Button android:id="@+id/disconnect" android:text="DISCONNECT"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        <TextView android:id="@+id/status" android:text="READY"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+    </LinearLayout>
+</ScrollView>

@@ -1,0 +1,80 @@
+name: Build SZXVPN APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      SING_BOX_VERSION: "1.14.0"
+      ANDROID_NDK_VERSION: "27.2.12479018"
+
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+
+      - name: Setup Android SDK/NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: yes | sdkmanager --licenses >/dev/null 2>&1 || true
+             && sdkmanager "ndk;${ANDROID_NDK_VERSION}"
+
+      - name: Checkout pinned sing-box
+        run: |
+          git clone --depth 1 --branch "v${SING_BOX_VERSION}"             https://github.com/SagerNet/sing-box.git sing-box
+
+      - name: Build libbox.aar
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd sing-box
+          export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+          export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
+          export CGO_ENABLED=1
+          export ANDROID_NDK="$ANDROID_NDK_HOME"
+
+          # Keep this build step isolated. If upstream changes its Android
+          # packaging command, Actions fails here instead of producing a fake APK.
+          if make libbox-android; then
+            :
+          elif make libbox.aar; then
+            :
+          else
+            echo "Unable to find the libbox Android build target in this pinned release."
+            echo "Available targets:"
+            make -n 2>/dev/null | head -100 || true
+            exit 1
+          fi
+
+          find . -name "libbox.aar" -print -exec cp {} ../app/libs/libbox.aar \;
+          test -s ../app/libs/libbox.aar
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug APK
+        run: gradle :app:assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: szxvpn-debug
+          path: app/build/outputs/apk/debug/*.apk
