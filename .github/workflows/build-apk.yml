@@ -1,105 +1,58 @@
-name: Build SZXVPN APK
+name: Android Build
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-
-permissions:
-  contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     env:
       SING_BOX_VERSION: "1.13.12"
       ANDROID_NDK_VERSION: "27.2.12479018"
 
     steps:
-
-      # --------------------------------------------------
-      # Checkout application
-      # --------------------------------------------------
-
-      - name: Checkout app
+      - name: Checkout
         uses: actions/checkout@v4
 
-
-      # --------------------------------------------------
-      # Java
-      # --------------------------------------------------
-
-      - name: Setup Java 17
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-
-      # --------------------------------------------------
-      # Go
-      # --------------------------------------------------
-
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24.x"
-
-
-      # --------------------------------------------------
-      # Android SDK
-      # --------------------------------------------------
+          go-version: "1.24.13"
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-
-      # --------------------------------------------------
-      # Android NDK
-      # --------------------------------------------------
-
-      - name: Install Android SDK and NDK
-        shell: bash
+      - name: Install Android NDK
         run: |
           set -euxo pipefail
 
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager --install "ndk;${ANDROID_NDK_VERSION}"
 
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0" \
-            "ndk;${ANDROID_NDK_VERSION}"
-
-
-      # --------------------------------------------------
-      # Clone sing-box
-      # --------------------------------------------------
-
-      - name: Clone sing-box
-        shell: bash
+      - name: Check Android environment
         run: |
           set -euxo pipefail
 
-          rm -rf sing-box
+          echo "ANDROID_HOME=${ANDROID_HOME}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}"
 
-          git clone \
-            --depth 1 \
-            --branch "v${SING_BOX_VERSION}" \
-            https://github.com/SagerNet/sing-box.git \
-            sing-box
+          export ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}"
+          export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
 
-          cd sing-box
+          test -d "${ANDROID_NDK_HOME}"
 
-          echo "sing-box version:"
-          git describe --tags --always
+          echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME}"
 
-
-      # --------------------------------------------------
-      # Build real libbox.aar
-      # --------------------------------------------------
+          go version
+          java -version
+          "${ANDROID_NDK_HOME}/ndk-build" --version || true
 
       - name: Build libbox.aar
         shell: bash
@@ -114,198 +67,70 @@ jobs:
           mkdir -p ../app/libs
 
           echo "======================================"
-          echo "Go"
+          echo "Install gomobile"
           echo "======================================"
 
-          go version
+          rm -f "$(go env GOPATH)/bin/gomobile"
+          rm -f "$(go env GOPATH)/bin/gobind"
 
-          echo "======================================"
-          echo "Android SDK"
-          echo "======================================"
-
-          echo "${ANDROID_HOME}"
-
-          echo "======================================"
-          echo "Android NDK"
-          echo "======================================"
-
-          echo "${ANDROID_NDK_HOME}"
-
-          test -d "${ANDROID_NDK_HOME}"
-
-
-          # ------------------------------------------------
-          # Install gomobile required by sing-box
-          # ------------------------------------------------
-
-          echo "Installing gomobile..."
-
-          go install \
-            github.com/sagernet/gomobile/cmd/gomobile@v0.1.12
+          go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.12
+          go install github.com/sagernet/gomobile/cmd/gobind@v0.1.12
 
           export PATH="$(go env GOPATH)/bin:${PATH}"
 
-          echo "GOPATH:"
-          go env GOPATH
-
-          echo "PATH:"
-          echo "${PATH}"
+          echo "PATH=${PATH}"
 
           echo "gomobile:"
           command -v gomobile
-
           gomobile version || true
 
-
-          # ------------------------------------------------
-          # Build libbox Android library
-          # ------------------------------------------------
+          echo "gobind:"
+          command -v gobind
+          gobind -h >/dev/null
 
           echo "======================================"
-          echo "Building libbox.aar"
+          echo "Build libbox.aar"
           echo "======================================"
+
+          rm -f ./libbox.aar
+          rm -f ../app/libs/libbox.aar
 
           go run ./cmd/internal/build_libbox -target android
 
-
-          # ------------------------------------------------
-          # Find generated AAR
-          # ------------------------------------------------
-
           echo "======================================"
-          echo "Searching for libbox.aar"
+          echo "Generated files"
           echo "======================================"
 
-          find . \
-            -type f \
-            \( \
-              -name "libbox.aar" \
-              -o \
-              -name "libbox-legacy.aar" \
-            \) \
+          find . -type f \
+            \( -name "libbox.aar" -o -name "libbox-legacy.aar" \) \
             -print
 
+          test -f ./libbox.aar
+          test -s ./libbox.aar
 
-          # ------------------------------------------------
-          # Verify generated AAR
-          # ------------------------------------------------
+          cp ./libbox.aar ../app/libs/libbox.aar
 
-          if [ ! -f "libbox.aar" ]; then
-            echo "ERROR: libbox.aar was not generated."
-
-            echo "All AAR files:"
-            find . -type f -name "*.aar" -print || true
-
-            echo "Build directory:"
-            find . -maxdepth 3 -type f | head -200 || true
-
-            exit 1
-          fi
-
-
-          # ------------------------------------------------
-          # Copy AAR into Android project
-          # ------------------------------------------------
-
-          cp libbox.aar ../app/libs/libbox.aar
-
+          test -f ../app/libs/libbox.aar
           test -s ../app/libs/libbox.aar
 
           echo "======================================"
-          echo "libbox.aar successfully created"
+          echo "SUCCESS"
           echo "======================================"
 
           ls -lh ../app/libs/libbox.aar
 
-
-      # --------------------------------------------------
-      # Verify AAR
-      # --------------------------------------------------
-
-      - name: Verify libbox AAR
+      - name: Build APK
         shell: bash
         run: |
           set -euxo pipefail
 
-          echo "Checking AAR..."
-
-          test -f app/libs/libbox.aar
           test -s app/libs/libbox.aar
 
-          ls -lh app/libs/libbox.aar
-
-          echo "Testing AAR archive..."
-
-          unzip -t app/libs/libbox.aar >/dev/null
-
-          echo "AAR verification OK"
-
-
-      # --------------------------------------------------
-      # Setup Gradle
-      # --------------------------------------------------
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-
-      # --------------------------------------------------
-      # Build Android APK
-      # --------------------------------------------------
-
-      - name: Build Debug APK
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          echo "======================================"
-          echo "Building APK"
-          echo "======================================"
-
-          gradle \
-            :app:assembleDebug \
-            --stacktrace \
-            --no-daemon
-
-
-      # --------------------------------------------------
-      # Verify APK
-      # --------------------------------------------------
-
-      - name: Verify APK
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          echo "Generated APK files:"
-
-          find app/build/outputs/apk \
-            -type f \
-            -name "*.apk" \
-            -print
-
-          APK="$(find app/build/outputs/apk/debug \
-            -type f \
-            -name "*.apk" \
-            -print \
-            -quit)"
-
-          if [ -z "${APK}" ]; then
-            echo "ERROR: APK was not generated."
-            exit 1
-          fi
-
-          echo "APK:"
-          ls -lh "${APK}"
-
-
-      # --------------------------------------------------
-      # Upload APK
-      # --------------------------------------------------
+          ./gradlew :app:assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: szxvpn-debug
+          name: app-debug
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
